@@ -46,10 +46,26 @@ for v in "${versions[@]}"; do
 		wget -qN "$baseUrl/"{{MD5,SHA{1,256}}SUMS{,.gpg},"$thisTarBase.manifest",'unpacked/build-info.txt'} || true
 		wget -N "$baseUrl/$thisTar"
 	)
-	
+
+
+	thisTarSlim="$thisTarBase-root-slim.tar.gz"
+
+	(
+		cd "$v"
+
+		gunzip -c "$thisTar" \
+		| tar --delete --wildcards \
+			"usr/share/doc/*" \
+			"usr/share/man/*" \
+			"usr/share/info/*" \
+			"var/cache/apt/*.bin" \
+			"var/lib/apt/lists/*" \
+		| gzip > "$thisTarSlim"
+	)
+
 	cat > "$v/Dockerfile" <<EOF
 FROM scratch
-ADD $thisTar /
+ADD $thisTarSlim /
 EOF
 	
 	cat >> "$v/Dockerfile" <<'EOF'
@@ -83,12 +99,17 @@ RUN set -xe \
 	&& echo 'Acquire::GzipIndexes "true"; Acquire::CompressionTypes::Order:: "gz";' > /etc/apt/apt.conf.d/docker-gzip-indexes \
 	\
 # https://github.com/docker/docker/blob/9a9fc01af8fb5d98b8eec0740716226fadb3735c/contrib/mkimage/debootstrap#L134-L151
-	&& echo 'Apt::AutoRemove::SuggestsImportant "false";' > /etc/apt/apt.conf.d/docker-autoremove-suggests
-
-# delete all the apt list files since they're big and get stale quickly
-RUN rm -rf /var/lib/apt/lists/*
-# this forces "apt-get update" in dependent images, which is also good
-
+	&& echo 'Apt::AutoRemove::SuggestsImportant "false";' > /etc/apt/apt.conf.d/docker-autoremove-suggests \
+	\
+# prevent doc installation
+	&& echo 'path-exclude /usr/share/doc/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc \
+	&& echo 'path-include /usr/share/doc/*/copyright' >> /etc/dpkg/dpkg.cfg.d/01_nodoc \
+	&& echo 'path-exclude /usr/share/man/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc \
+	&& echo 'path-exclude /usr/share/groff/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc \
+	&& echo 'path-exclude /usr/share/info/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc \
+	&& echo 'path-exclude /usr/share/lintian/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc \
+	&& echo 'path-exclude /usr/share/info/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc
+	
 # enable the universe
 RUN sed -i 's/^#\s*\(deb.*universe\)$/\1/g' /etc/apt/sources.list
 
@@ -107,8 +128,8 @@ done
 
 repo="$(cat repo 2>/dev/null || true)"
 if [ -z "$repo" ]; then
-	user="$(docker info | awk -F ': ' '$1 == "Username" { print $2; exit }')"
-	repo="${user:+$user/}ubuntu-core"
+	#user="$(docker info | awk -F ': ' '$1 == "Username" { print $2; exit }')"
+	repo="dockerkit/ubuntu"
 fi
 latest="$(< latest)"
 for v in "${versions[@]}"; do
